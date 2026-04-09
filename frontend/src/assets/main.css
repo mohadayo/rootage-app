@@ -1,0 +1,21 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --color-rootage-bg: #FAFAFA;
+  --color-rootage-warm: #F3F1EE;
+  --color-rootage-dark: #131313;
+  --color-rootage-text: #1A1A1A;
+  --color-rootage-sub: #6B6B6B;
+  --color-rootage-muted: #A0A0A0;
+  --color-rootage-accent: #404040;
+  --color-rootage-accent-h: #555555;
+  --color-rootage-rule: #D8D8D8;
+  --color-rootage-rule-faint: #EDEDED;
+}
+
+body {
+  font-family: "Zen Kaku Gothic New", "Hiragino Kaku Gothic ProN", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}

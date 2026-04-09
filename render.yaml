@@ -1,0 +1,33 @@
+databases:
+  - name: rootage-db
+    plan: free
+    databaseName: rootage
+    user: rootage_user
+
+services:
+  - type: web
+    name: rootage
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    dockerArgs:
+      VITE_ENABLE_RAG: true
+    envVars:
+      - key: DB_URL
+        fromDatabase:
+          name: rootage-db
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: SERVER_PORT
+        value: "8080"
+      - key: CORS_ORIGIN
+        value: ""
+      - key: ALLOWED_EMAIL_DOMAIN
+        value: example.com
+      - key: RESEND_API_KEY
+        sync: false
+      - key: BASE_URL
+        value: https://rootage.onrender.com
