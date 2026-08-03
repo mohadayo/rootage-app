@@ -3,10 +3,13 @@ package repository
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
+	"errors"
 
 	"github.com/rootage-ses-quiz/backend/internal/model"
 )
+
+// ErrAlreadyAnswered は同一セッションの同一問題に既に回答済みであることを表す
+var ErrAlreadyAnswered = errors.New("already answered")
 
 type QuizRepository struct {
 	db *sql.DB
@@ -18,18 +21,25 @@ func NewQuizRepository(db *sql.DB) *QuizRepository {
 
 func (r *QuizRepository) CreateSession(ctx context.Context, session *model.QuizSession) error {
 	return r.db.QueryRowContext(ctx,
-		`INSERT INTO quiz_sessions (user_id, category_id, difficulty, total) VALUES ($1, $2, $3, $4)
+		`INSERT INTO quiz_sessions (user_id, category_id, difficulty, total, question_ids) VALUES ($1, $2, $3, $4, $5)
 		 RETURNING id, started_at`,
-		session.UserID, session.CategoryID, session.Difficulty, session.Total,
+		session.UserID, session.CategoryID, session.Difficulty, session.Total, session.QuestionIDs,
 	).Scan(&session.ID, &session.StartedAt)
 }
 
+// AddAnswer は回答を保存する。同一セッションの同一問題に対する2回目以降は ErrAlreadyAnswered を返す
 func (r *QuizRepository) AddAnswer(ctx context.Context, answer *model.QuizAnswer) error {
-	return r.db.QueryRowContext(ctx,
+	err := r.db.QueryRowContext(ctx,
 		`INSERT INTO quiz_answers (session_id, question_id, selected_index, is_correct)
-		 VALUES ($1, $2, $3, $4) RETURNING id`,
+		 VALUES ($1, $2, $3, $4)
+		 ON CONFLICT (session_id, question_id) DO NOTHING
+		 RETURNING id`,
 		answer.SessionID, answer.QuestionID, answer.SelectedIndex, answer.IsCorrect,
 	).Scan(&answer.ID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrAlreadyAnswered
+	}
+	return err
 }
 
 func (r *QuizRepository) FinishSession(ctx context.Context, sessionID string, score int) error {
@@ -43,9 +53,9 @@ func (r *QuizRepository) FinishSession(ctx context.Context, sessionID string, sc
 func (r *QuizRepository) GetSession(ctx context.Context, sessionID string) (*model.QuizSession, error) {
 	var s model.QuizSession
 	err := r.db.QueryRowContext(ctx,
-		`SELECT id, user_id, category_id, difficulty, score, total, started_at, finished_at
+		`SELECT id, user_id, category_id, difficulty, score, total, started_at, finished_at, question_ids
 		 FROM quiz_sessions WHERE id = $1`, sessionID,
-	).Scan(&s.ID, &s.UserID, &s.CategoryID, &s.Difficulty, &s.Score, &s.Total, &s.StartedAt, &s.FinishedAt)
+	).Scan(&s.ID, &s.UserID, &s.CategoryID, &s.Difficulty, &s.Score, &s.Total, &s.StartedAt, &s.FinishedAt, &s.QuestionIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -246,6 +256,3 @@ type DailyStats struct {
 	Total   int
 	Correct int
 }
-
-// Suppress unused import
-var _ = json.Marshal

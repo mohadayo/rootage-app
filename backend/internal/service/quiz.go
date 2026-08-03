@@ -2,13 +2,28 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/rootage-ses-quiz/backend/internal/dto"
 	"github.com/rootage-ses-quiz/backend/internal/model"
 	"github.com/rootage-ses-quiz/backend/internal/repository"
 )
+
+// sessionHasQuestion はその問題がセッション開始時に出題されたものかを判定する。
+// question_ids を記録する前に開始された既存セッションは検証対象外とする。
+func sessionHasQuestion(session *model.QuizSession, questionID string) bool {
+	if len(session.QuestionIDs) == 0 {
+		return true
+	}
+	var ids []string
+	if err := json.Unmarshal(session.QuestionIDs, &ids); err != nil {
+		return true
+	}
+	return slices.Contains(ids, questionID)
+}
 
 type QuizService struct {
 	quizRepo     *repository.QuizRepository
@@ -38,11 +53,21 @@ func (s *QuizService) StartSession(ctx context.Context, userID, categoryID, diff
 		return nil, errors.New("このカテゴリには問題がありません")
 	}
 
+	questionIDs := make([]string, len(questions))
+	for i, q := range questions {
+		questionIDs[i] = q.ID
+	}
+	idsJSON, err := json.Marshal(questionIDs)
+	if err != nil {
+		return nil, errors.New("セッションの作成に失敗しました")
+	}
+
 	session := &model.QuizSession{
-		UserID:     userID,
-		CategoryID: categoryID,
-		Difficulty: difficulty,
-		Total:      len(questions),
+		UserID:      userID,
+		CategoryID:  categoryID,
+		Difficulty:  difficulty,
+		Total:       len(questions),
+		QuestionIDs: idsJSON,
 	}
 	if err := s.quizRepo.CreateSession(ctx, session); err != nil {
 		return nil, errors.New("セッションの作成に失敗しました")
@@ -74,10 +99,21 @@ func (s *QuizService) SubmitAnswer(ctx context.Context, userID string, req dto.A
 	if session.FinishedAt != nil {
 		return nil, errors.New("このセッションは既に終了しています")
 	}
+	if !sessionHasQuestion(session, req.QuestionID) {
+		return nil, errors.New("この問題はこのセッションでは出題されていません")
+	}
 
 	question, err := s.questionRepo.GetByID(ctx, req.QuestionID)
 	if err != nil {
 		return nil, errors.New("問題が見つかりません")
+	}
+
+	var choices []string
+	if err := json.Unmarshal(question.Choices, &choices); err != nil {
+		return nil, errors.New("問題データが不正です")
+	}
+	if req.SelectedIndex < 0 || req.SelectedIndex >= len(choices) {
+		return nil, errors.New("選択肢の指定が正しくありません")
 	}
 
 	isCorrect := req.SelectedIndex == question.CorrectIndex
@@ -89,6 +125,9 @@ func (s *QuizService) SubmitAnswer(ctx context.Context, userID string, req dto.A
 		IsCorrect:     isCorrect,
 	}
 	if err := s.quizRepo.AddAnswer(ctx, answer); err != nil {
+		if errors.Is(err, repository.ErrAlreadyAnswered) {
+			return nil, errors.New("この問題には既に回答済みです")
+		}
 		return nil, errors.New("回答の保存に失敗しました")
 	}
 
@@ -106,6 +145,9 @@ func (s *QuizService) FinishSession(ctx context.Context, userID, sessionID strin
 	}
 	if session.UserID != userID {
 		return nil, errors.New("不正なセッションです")
+	}
+	if session.FinishedAt != nil {
+		return nil, errors.New("このセッションは既に終了しています")
 	}
 
 	answers, err := s.quizRepo.GetSessionAnswers(ctx, sessionID)
