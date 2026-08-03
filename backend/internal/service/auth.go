@@ -124,6 +124,38 @@ func (s *AuthService) Login(ctx context.Context, req dto.LoginRequest) (*dto.Aut
 	}, nil
 }
 
+// EnsureAdminUser は管理者アカウントが存在しなければ作成する。
+// 既に同じメールアドレスのユーザーがいる場合は何もしない（運用中に変更されたパスワードを上書きしないため）。
+func (s *AuthService) EnsureAdminUser(ctx context.Context, email, password string) error {
+	if email == "" || password == "" {
+		return nil
+	}
+	if len(password) < 8 {
+		return errors.New("ADMIN_PASSWORD は8文字以上にしてください")
+	}
+
+	email = strings.ToLower(strings.TrimSpace(email))
+	existing, err := s.userRepo.FindByEmail(ctx, email)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if existing != nil {
+		return nil
+	}
+
+	hash, err := pkg.HashPassword(password)
+	if err != nil {
+		return errors.New("パスワードのハッシュ化に失敗しました")
+	}
+
+	return s.userRepo.Create(ctx, &model.User{
+		Email:        email,
+		PasswordHash: hash,
+		Name:         "管理者",
+		Role:         "admin",
+	})
+}
+
 func (s *AuthService) RequestPasswordReset(ctx context.Context, email string) error {
 	user, err := s.userRepo.FindByEmail(ctx, email)
 	if err != nil || user == nil {

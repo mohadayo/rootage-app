@@ -14,6 +14,8 @@ type Config struct {
 	AllowedEmailDomain string
 	ResendAPIKey       string
 	BaseURL            string
+	AdminEmail         string
+	AdminPassword      string
 }
 
 func Load() *Config {
@@ -32,6 +34,8 @@ func Load() *Config {
 		AllowedEmailDomain: getEnv("ALLOWED_EMAIL_DOMAIN", ""),
 		ResendAPIKey:       getEnv("RESEND_API_KEY", ""),
 		BaseURL:            getEnv("BASE_URL", getEnv("CORS_ORIGIN", "http://localhost:5173")),
+		AdminEmail:         getEnv("ADMIN_EMAIL", ""),
+		AdminPassword:      getEnv("ADMIN_PASSWORD", ""),
 	}
 }
 

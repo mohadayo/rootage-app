@@ -61,6 +61,14 @@ func main() {
 	ragSvc := service.NewRAGService(documentRepo, chatRepo, openaiClient)
 	adminSvc := service.NewAdminService(categoryRepo, questionRepo, documentRepo, guideRepo, userRepo, openaiClient)
 
+	// 管理者アカウントは環境変数が設定されているときだけ作成する（既存アカウントは上書きしない）
+	if err := authSvc.EnsureAdminUser(context.Background(), cfg.AdminEmail, cfg.AdminPassword); err != nil {
+		log.Fatalf("failed to create admin user: %v", err)
+	}
+	if cfg.AdminEmail == "" {
+		log.Println("ADMIN_EMAIL is not set, skipping admin user creation")
+	}
+
 	// シード文書のインデックス作成（シード完了後にバックグラウンドで実行）
 	if cfg.OpenAIAPIKey != "" {
 		go indexUnprocessedDocuments(adminSvc)
