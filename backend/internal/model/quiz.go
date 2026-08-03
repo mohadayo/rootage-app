@@ -14,6 +14,8 @@ type QuizSession struct {
 	Total      int        `json:"total"`
 	StartedAt  time.Time  `json:"started_at"`
 	FinishedAt *time.Time `json:"finished_at,omitempty"`
+	// このセッションで出題した問題のID。回答時の検証に使うためクライアントには返さない
+	QuestionIDs json.RawMessage `json:"-"`
 }
 
 type QuizAnswer struct {
