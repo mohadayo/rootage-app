@@ -13,3 +13,8 @@ backend/tmp/
 .playwright-mcp/
 *.png
 !docs/*.png
+
+# ビルド成果物
+backend/server
+backend/rootage-quiz-server
+backend/public/

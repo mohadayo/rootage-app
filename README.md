@@ -138,22 +138,33 @@ npm run dev
 | `BASE_URL` | アプリのベースURL | CORS_ORIGINの値 |
 | `CORS_ORIGIN` | CORS許可オリジン | http://localhost:5173 |
 | `ALLOWED_EMAIL_DOMAIN` | 登録許可メールドメイン | - |
+| `ADMIN_EMAIL` | 初回起動時に作成する管理者のメール（未設定なら作成しない） | - |
+| `ADMIN_PASSWORD` | 同パスワード（8文字以上） | - |
 | `SERVER_PORT` | サーバーポート | 8080 |
 | `VITE_ENABLE_RAG` | 社内検索AI機能の有効化（フロント） | false |
 
-## デモアカウント
+## 管理者アカウント
 
-| ユーザー | メール | パスワード | 権限 |
-|---|---|---|---|
-| 管理者 | admin@example.com | admin1234 | admin |
+管理者はシードデータには含まれません。`ADMIN_EMAIL` と `ADMIN_PASSWORD` を設定して起動すると、そのアカウントが存在しない場合のみ作成されます。
+
+```bash
+ADMIN_EMAIL=admin@your-domain.example ADMIN_PASSWORD='<8文字以上のパスワード>' go run ./cmd/server/main.go
+```
+
+同じメールアドレスのユーザーが既にいる場合は何もしません（運用中に変更したパスワードを上書きしないため）。作成後は環境変数を外して問題ありません。
 
 一般ユーザーは新規登録画面から作成できます。`ALLOWED_EMAIL_DOMAIN` を設定するとドメイン制限が有効になります。
 
 ## テスト
 
 ```bash
+docker compose up -d   # 統合テストは実際のDBに接続します
 cd backend
 go test ./... -v
 ```
 
-48テスト（ユニットテスト + 統合テスト）が実行されます。
+64テスト（ユニットテスト + 統合テスト）が実行されます。`internal/handler` のテストは DB に接続するため、`docker compose up -d` で PostgreSQL を起動しておく必要があります。別の接続先を使う場合は `TEST_DB_URL` で指定できます。
+
+```bash
+TEST_DB_URL="postgres://user:pass@localhost:5432/ses_quiz?sslmode=disable" go test ./...
+```
