@@ -7,12 +7,8 @@ INSERT INTO categories (id, name, description) VALUES
   ('a1000000-0000-0000-0000-000000000004', 'SES業界', 'SES契約の仕組み、業界構造、キャリアパスなどSESビジネスの理解')
 ON CONFLICT (id) DO NOTHING;
 
--- Admin user (password: admin1234)
-INSERT INTO users (id, email, password_hash, name, role) VALUES
-  ('b1000000-0000-0000-0000-000000000001', 'admin@example.com',
-   '$2a$10$EUBXKAOonXSFQAri5kbz9.5sMN0A06y6rNgFjtVT1YFnLtu9FBj9a',
-   '管理者', 'admin')
-ON CONFLICT (id) DO NOTHING;
+-- 管理者アカウントはここでは作らない。
+-- 環境変数 ADMIN_EMAIL / ADMIN_PASSWORD を設定して起動すると初回のみ作成される（cmd/server/main.go）。
 
 -- 技術基礎 (10問)
 INSERT INTO questions (category_id, text, choices, correct_index, explanation) VALUES

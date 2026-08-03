@@ -21,6 +21,7 @@ const testJWTSecret = "test-jwt-secret-key"
 type testEnv struct {
 	db          *sql.DB
 	mux         *http.ServeMux
+	authSvc     *service.AuthService
 	authHandler *AuthHandler
 	quizHandler *QuizHandler
 }
@@ -67,6 +68,7 @@ func setupTestEnv(t *testing.T) *testEnv {
 	return &testEnv{
 		db:          db,
 		mux:         mux,
+		authSvc:     authSvc,
 		authHandler: authHandler,
 		quizHandler: quizHandler,
 	}
