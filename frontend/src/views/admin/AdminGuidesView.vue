@@ -6,7 +6,7 @@ import {
   createGuideCategory, updateGuideCategory, deleteGuideCategory,
   type Guide, type GuideCategory,
 } from '@/api/admin'
-import { marked } from 'marked'
+import { renderMarkdown } from '@/markdown'
 
 const guides = ref<Guide[]>([])
 const categories = ref<GuideCategory[]>([])
@@ -28,7 +28,7 @@ const form = ref({
 const categoryForm = ref({ name: '', sort_order: 0 })
 const { open: confirm } = useConfirm()
 
-const previewHtml = computed(() => marked(form.value.content))
+const previewHtml = computed(() => renderMarkdown(form.value.content))
 
 onMounted(async () => {
   await loadAll()

@@ -2,7 +2,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { getGuide, type Guide } from '@/api/guide'
-import { marked } from 'marked'
+import { renderMarkdown } from '@/markdown'
 
 const route = useRoute()
 const guide = ref<Guide | null>(null)
@@ -11,7 +11,7 @@ const error = ref('')
 
 const renderedContent = computed(() => {
   if (!guide.value) return ''
-  return marked(guide.value.content)
+  return renderMarkdown(guide.value.content)
 })
 
 onMounted(async () => {
