@@ -12,10 +12,10 @@ import (
 const testSecret = "test-secret"
 
 func TestAuth_ValidToken(t *testing.T) {
-	token, _ := pkg.GenerateToken("user-1", "test@example.com", "user", testSecret)
+	token, _ := pkg.GenerateToken("user-1", "test@example.com", "user", 0, testSecret)
 
 	called := false
-	handler := Auth(testSecret, func(w http.ResponseWriter, r *http.Request) {
+	handler := Auth(testSecret, nil, func(w http.ResponseWriter, r *http.Request) {
 		called = true
 		if uid := GetUserID(r.Context()); uid != "user-1" {
 			t.Errorf("UserID = %q, want %q", uid, "user-1")
@@ -40,8 +40,47 @@ func TestAuth_ValidToken(t *testing.T) {
 	}
 }
 
+func TestAuth_TokenVersionMatch(t *testing.T) {
+	token, _ := pkg.GenerateToken("user-1", "test@example.com", "user", 3, testSecret)
+
+	called := false
+	tv := func(ctx context.Context, userID string) (int, error) { return 3, nil }
+	handler := Auth(testSecret, tv, func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	})
+
+	r := httptest.NewRequest("GET", "/", nil)
+	r.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	handler(w, r)
+
+	if !called || w.Code != http.StatusOK {
+		t.Errorf("matching token_version should pass: called=%v code=%d", called, w.Code)
+	}
+}
+
+func TestAuth_TokenVersionMismatch(t *testing.T) {
+	// パスワード変更後（DB側の token_version が進んだ後）の古いトークンは失効する。
+	token, _ := pkg.GenerateToken("user-1", "test@example.com", "user", 3, testSecret)
+
+	tv := func(ctx context.Context, userID string) (int, error) { return 4, nil }
+	handler := Auth(testSecret, tv, func(w http.ResponseWriter, r *http.Request) {
+		t.Error("handler should not be called for stale token_version")
+	})
+
+	r := httptest.NewRequest("GET", "/", nil)
+	r.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	handler(w, r)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusUnauthorized)
+	}
+}
+
 func TestAuth_NoHeader(t *testing.T) {
-	handler := Auth(testSecret, func(w http.ResponseWriter, r *http.Request) {
+	handler := Auth(testSecret, nil, func(w http.ResponseWriter, r *http.Request) {
 		t.Error("handler should not be called")
 	})
 
@@ -55,7 +94,7 @@ func TestAuth_NoHeader(t *testing.T) {
 }
 
 func TestAuth_InvalidFormat(t *testing.T) {
-	handler := Auth(testSecret, func(w http.ResponseWriter, r *http.Request) {
+	handler := Auth(testSecret, nil, func(w http.ResponseWriter, r *http.Request) {
 		t.Error("handler should not be called")
 	})
 
@@ -70,7 +109,7 @@ func TestAuth_InvalidFormat(t *testing.T) {
 }
 
 func TestAuth_InvalidToken(t *testing.T) {
-	handler := Auth(testSecret, func(w http.ResponseWriter, r *http.Request) {
+	handler := Auth(testSecret, nil, func(w http.ResponseWriter, r *http.Request) {
 		t.Error("handler should not be called")
 	})
 
@@ -85,9 +124,9 @@ func TestAuth_InvalidToken(t *testing.T) {
 }
 
 func TestAuth_WrongSecret(t *testing.T) {
-	token, _ := pkg.GenerateToken("user-1", "test@example.com", "user", "other-secret")
+	token, _ := pkg.GenerateToken("user-1", "test@example.com", "user", 0, "other-secret")
 
-	handler := Auth(testSecret, func(w http.ResponseWriter, r *http.Request) {
+	handler := Auth(testSecret, nil, func(w http.ResponseWriter, r *http.Request) {
 		t.Error("handler should not be called")
 	})
 

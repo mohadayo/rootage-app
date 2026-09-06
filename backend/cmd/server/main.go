@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -91,11 +92,12 @@ func main() {
 		pkg.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 
-	// Auth routes (public)
-	mux.HandleFunc("POST /api/auth/register", authHandler.Register)
-	mux.HandleFunc("POST /api/auth/login", authHandler.Login)
-	mux.HandleFunc("POST /api/auth/forgot-password", authHandler.ForgotPassword)
-	mux.HandleFunc("POST /api/auth/reset-password", authHandler.ResetPassword)
+	// Auth routes (public) — 総当たり・濫造・メール濫用を防ぐため IP 単位のレート制限をかける
+	authLimit := middleware.RateLimit(10, time.Minute)
+	mux.HandleFunc("POST /api/auth/register", authLimit(authHandler.Register))
+	mux.HandleFunc("POST /api/auth/login", authLimit(authHandler.Login))
+	mux.HandleFunc("POST /api/auth/forgot-password", authLimit(authHandler.ForgotPassword))
+	mux.HandleFunc("POST /api/auth/reset-password", authLimit(authHandler.ResetPassword))
 
 	// Category routes (authenticated)
 	mux.HandleFunc("GET /api/categories", middleware.Auth(cfg.JWTSecret, userRepo.GetTokenVersion, quizHandler.ListCategories))
@@ -111,8 +113,9 @@ func main() {
 	// User dashboard (authenticated)
 	mux.HandleFunc("GET /api/users/me/stats", middleware.Auth(cfg.JWTSecret, userRepo.GetTokenVersion, quizHandler.Dashboard))
 
-	// RAG routes (authenticated)
-	mux.HandleFunc("POST /api/rag/ask", middleware.Auth(cfg.JWTSecret, userRepo.GetTokenVersion, ragHandler.Ask))
+	// RAG routes (authenticated) — OpenAI 課金消尽を防ぐため質問エンドポイントに IP 制限をかける
+	ragLimit := middleware.RateLimit(20, time.Minute)
+	mux.HandleFunc("POST /api/rag/ask", middleware.Auth(cfg.JWTSecret, userRepo.GetTokenVersion, ragLimit(ragHandler.Ask)))
 	mux.HandleFunc("GET /api/rag/history", middleware.Auth(cfg.JWTSecret, userRepo.GetTokenVersion, ragHandler.History))
 
 	// Admin routes (authenticated + admin)
@@ -156,16 +159,30 @@ func main() {
 
 	// フロントエンドの静的ファイル配信（本番用）
 	if _, err := os.Stat("public"); err == nil {
-		fs := http.FileServer(http.Dir("public"))
+		publicDir := http.Dir("public")
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-			// /api で始まるパスはAPIハンドラーに任せる
-			path := r.URL.Path
-			// 静的ファイルが存在するか確認
-			if _, err := os.Stat("public" + path); err == nil && path != "/" {
-				fs.ServeHTTP(w, r)
+			// /api で始まるパスはここに来た時点で未定義のパス/メソッド。
+			// index.html を 200 で返すと API クライアントが誤動作するため JSON で 404 を返す。
+			if strings.HasPrefix(r.URL.Path, "/api/") {
+				pkg.WriteError(w, http.StatusNotFound, "リソースが見つかりません")
 				return
 			}
-			// SPA: 存在しないパスは全てindex.htmlを返す
+
+			// r.URL.Path を正規化して public 配下に閉じる（.. による探索・存在オラクルを防ぐ）。
+			cleaned := path.Clean("/" + r.URL.Path)
+			if cleaned != "/" {
+				if f, err := publicDir.Open(cleaned); err == nil {
+					info, statErr := f.Stat()
+					f.Close()
+					// 実ファイル（ディレクトリでない）のみ配信する。
+					// ディレクトリは FileServer の一覧表示を避けて index.html にフォールバックする。
+					if statErr == nil && !info.IsDir() {
+						http.ServeFile(w, r, filepath.Join("public", cleaned))
+						return
+					}
+				}
+			}
+			// SPA: それ以外は index.html を返す。
 			http.ServeFile(w, r, "public/index.html")
 		})
 		log.Println("Serving frontend from ./public")
@@ -173,6 +190,8 @@ func main() {
 
 	// Apply global middleware
 	var h http.Handler = mux
+	// ボディサイズ上限（既定1MB、アップロード系のみ15MB）で OOM 攻撃を防ぐ
+	h = middleware.BodyLimit(1<<20, 15<<20)(h)
 	h = middleware.Recovery(h)
 	h = middleware.Logging(h)
 	h = middleware.CORS(cfg.CorsOrigin)(h)
