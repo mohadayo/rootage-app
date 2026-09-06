@@ -21,7 +21,15 @@ func NewRAGService(docRepo *repository.DocumentRepository, chatRepo *repository.
 	return &RAGService{docRepo: docRepo, chatRepo: chatRepo, openaiClient: openaiClient}
 }
 
+const (
+	maxQuestionChars       = 4000
+	maxHistoryContentChars = 4000
+)
+
 func (s *RAGService) Ask(ctx context.Context, userID, question string, history []dto.RAGHistoryMessage) (*dto.RAGResponse, error) {
+	// 質問文の長さを制限する（青天井の OpenAI 課金を防ぐ）。
+	question = truncateRunes(question, maxQuestionChars)
+
 	// Generate embedding for the question
 	embedding, err := s.openaiClient.GenerateEmbedding(ctx, question)
 	if err != nil {
@@ -74,7 +82,15 @@ func (s *RAGService) Ask(ctx context.Context, userID, question string, history [
 		history = history[len(history)-maxHistory:]
 	}
 	for _, h := range history {
-		chatMessages = append(chatMessages, chatMessage{Role: h.Role, Content: h.Content})
+		// role はクライアント由来。system を混ぜられるとシステムプロンプトを
+		// 乗っ取られる（プロンプトインジェクション）ため user / assistant のみ許可する。
+		if h.Role != "user" && h.Role != "assistant" {
+			continue
+		}
+		chatMessages = append(chatMessages, chatMessage{
+			Role:    h.Role,
+			Content: truncateRunes(h.Content, maxHistoryContentChars),
+		})
 	}
 	chatMessages = append(chatMessages, chatMessage{Role: "user", Content: question})
 
@@ -147,15 +163,35 @@ func (s *RAGService) GetHistory(ctx context.Context, userID string) ([]dto.ChatH
 	return items, nil
 }
 
+func truncateRunes(s string, max int) string {
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	return string(r[:max])
+}
+
 // ChunkText splits text into chunks of roughly maxChars characters
 func ChunkText(text string, maxChars int) []string {
 	if maxChars <= 0 {
 		maxChars = 1000
 	}
 
+	// 改行コードを正規化する（CRLF / CR -> LF）。CRLF のままだと段落区切り "\n\n"
+	// が見つからず全体が1チャンクになり、埋め込み API の入力上限を超えて失敗する。
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+
 	paragraphs := strings.Split(text, "\n\n")
 	var chunks []string
 	var current strings.Builder
+
+	flush := func() {
+		if current.Len() > 0 {
+			chunks = append(chunks, current.String())
+			current.Reset()
+		}
+	}
 
 	for _, para := range paragraphs {
 		para = strings.TrimSpace(para)
@@ -163,9 +199,15 @@ func ChunkText(text string, maxChars int) []string {
 			continue
 		}
 
+		// 段落単体が上限を超える場合は rune 単位でハードスプリットする。
+		if len([]rune(para)) > maxChars {
+			flush()
+			chunks = append(chunks, hardSplit(para, maxChars)...)
+			continue
+		}
+
 		if current.Len()+len(para) > maxChars && current.Len() > 0 {
-			chunks = append(chunks, current.String())
-			current.Reset()
+			flush()
 		}
 		if current.Len() > 0 {
 			current.WriteString("\n\n")
@@ -173,9 +215,20 @@ func ChunkText(text string, maxChars int) []string {
 		current.WriteString(para)
 	}
 
-	if current.Len() > 0 {
-		chunks = append(chunks, current.String())
-	}
-
+	flush()
 	return chunks
+}
+
+// hardSplit は文字列を rune 単位で maxChars ごとに分割する。
+func hardSplit(s string, maxChars int) []string {
+	runes := []rune(s)
+	var out []string
+	for i := 0; i < len(runes); i += maxChars {
+		end := i + maxChars
+		if end > len(runes) {
+			end = len(runes)
+		}
+		out = append(out, string(runes[i:end]))
+	}
+	return out
 }

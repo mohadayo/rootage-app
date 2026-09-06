@@ -21,7 +21,7 @@ func (r *CategoryRepository) DB() *sql.DB {
 
 func (r *CategoryRepository) List(ctx context.Context) ([]model.Category, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT id, name, description, created_at, updated_at FROM categories ORDER BY name`)
+		`SELECT id, name, description, created_at, updated_at FROM categories WHERE is_active ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -64,7 +64,9 @@ func (r *CategoryRepository) Update(ctx context.Context, cat *model.Category) er
 	return err
 }
 
-func (r *CategoryRepository) Delete(ctx context.Context, id string) error {
-	_, err := r.db.ExecContext(ctx, `DELETE FROM categories WHERE id = $1`, id)
+// Deactivate はカテゴリを論理削除する（出題・一覧から外すが履歴は残す）。
+func (r *CategoryRepository) Deactivate(ctx context.Context, id string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE categories SET is_active = FALSE, updated_at = NOW() WHERE id = $1`, id)
 	return err
 }

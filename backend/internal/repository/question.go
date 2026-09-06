@@ -28,13 +28,13 @@ func (r *QuestionRepository) GetRandomByCategoryAndDifficulty(ctx context.Contex
 	if difficulty != "" {
 		rows, err = r.db.QueryContext(ctx,
 			`SELECT id, category_id, text, choices, correct_index, explanation, difficulty, created_at, updated_at
-			 FROM questions WHERE category_id = $1 AND difficulty = $2 ORDER BY RANDOM() LIMIT $3`,
+			 FROM questions WHERE category_id = $1 AND difficulty = $2 AND is_active ORDER BY RANDOM() LIMIT $3`,
 			categoryID, difficulty, limit,
 		)
 	} else {
 		rows, err = r.db.QueryContext(ctx,
 			`SELECT id, category_id, text, choices, correct_index, explanation, difficulty, created_at, updated_at
-			 FROM questions WHERE category_id = $1 ORDER BY RANDOM() LIMIT $2`,
+			 FROM questions WHERE category_id = $1 AND is_active ORDER BY RANDOM() LIMIT $2`,
 			categoryID, limit,
 		)
 	}
@@ -104,10 +104,10 @@ func (r *QuestionRepository) List(ctx context.Context, categoryID string) ([]mod
 	var err error
 
 	if categoryID != "" {
-		query += ` WHERE category_id = $1 ORDER BY created_at DESC`
+		query += ` WHERE category_id = $1 AND is_active ORDER BY created_at DESC`
 		rows, err = r.db.QueryContext(ctx, query, categoryID)
 	} else {
-		query += ` ORDER BY created_at DESC`
+		query += ` WHERE is_active ORDER BY created_at DESC`
 		rows, err = r.db.QueryContext(ctx, query)
 	}
 	if err != nil {
@@ -149,7 +149,9 @@ func (r *QuestionRepository) Update(ctx context.Context, q *model.Question) erro
 	return err
 }
 
-func (r *QuestionRepository) Delete(ctx context.Context, id string) error {
-	_, err := r.db.ExecContext(ctx, `DELETE FROM questions WHERE id = $1`, id)
+// Deactivate は問題を論理削除する（出題・一覧から外すが回答履歴は残す）。
+func (r *QuestionRepository) Deactivate(ctx context.Context, id string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE questions SET is_active = FALSE, updated_at = NOW() WHERE id = $1`, id)
 	return err
 }

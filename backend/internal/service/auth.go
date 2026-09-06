@@ -26,35 +26,68 @@ type AuthService struct {
 	jwtSecret          string
 	allowedEmailDomain string
 	resendAPIKey       string
+	mailFrom           string
 	baseURL            string
 }
 
-func NewAuthService(userRepo *repository.UserRepository, resetRepo *repository.PasswordResetRepository, jwtSecret, allowedEmailDomain, resendAPIKey, baseURL string) *AuthService {
+func NewAuthService(userRepo *repository.UserRepository, resetRepo *repository.PasswordResetRepository, jwtSecret, allowedEmailDomain, resendAPIKey, mailFrom, baseURL string) *AuthService {
+	if mailFrom == "" {
+		mailFrom = "rootage <onboarding@resend.dev>"
+	}
 	return &AuthService{
 		userRepo:           userRepo,
 		resetRepo:          resetRepo,
 		jwtSecret:          jwtSecret,
 		allowedEmailDomain: allowedEmailDomain,
 		resendAPIKey:       resendAPIKey,
+		mailFrom:           mailFrom,
 		baseURL:            baseURL,
 	}
+}
+
+// minPasswordLength はパスワードの最低長。
+const minPasswordLength = 8
+
+// commonWeakPasswords はよくある弱いパスワードのブロックリスト（小文字比較）。
+var commonWeakPasswords = map[string]bool{
+	"password": true, "password1": true, "12345678": true, "123456789": true,
+	"1234567890": true, "qwerty": true, "qwertyui": true, "11111111": true,
+	"00000000": true, "abcdefgh": true, "iloveyou": true, "welcome1": true,
+	"admin123": true, "passw0rd": true, "letmein1": true,
+}
+
+// validatePassword はパスワードの強度を検証する。
+func validatePassword(password string) error {
+	if len([]rune(password)) < minPasswordLength {
+		return fmt.Errorf("パスワードは%d文字以上必要です", minPasswordLength)
+	}
+	if commonWeakPasswords[strings.ToLower(password)] {
+		return errors.New("推測されやすいパスワードです。別のパスワードを設定してください")
+	}
+	return nil
+}
+
+// normalizeEmail はメールアドレスを正規化する（前後空白除去・小文字化）。
+func normalizeEmail(email string) string {
+	return strings.ToLower(strings.TrimSpace(email))
 }
 
 func (s *AuthService) Register(ctx context.Context, req dto.RegisterRequest) (*dto.AuthResponse, error) {
 	if req.Email == "" || req.Password == "" || req.Name == "" {
 		return nil, errors.New("メール、パスワード、名前は必須です")
 	}
-	if len(req.Password) < 6 {
-		return nil, errors.New("パスワードは6文字以上必要です")
+	if err := validatePassword(req.Password); err != nil {
+		return nil, err
 	}
+	email := normalizeEmail(req.Email)
 	if s.allowedEmailDomain != "" {
-		suffix := "@" + s.allowedEmailDomain
-		if !strings.HasSuffix(strings.ToLower(req.Email), strings.ToLower(suffix)) {
-			return nil, fmt.Errorf("%s のメールアドレスのみ登録できます", suffix)
+		suffix := "@" + strings.ToLower(s.allowedEmailDomain)
+		if !strings.HasSuffix(email, suffix) {
+			return nil, fmt.Errorf("@%s のメールアドレスのみ登録できます", s.allowedEmailDomain)
 		}
 	}
 
-	existing, _ := s.userRepo.FindByEmail(ctx, req.Email)
+	existing, _ := s.userRepo.FindByEmail(ctx, email)
 	if existing != nil {
 		return nil, errors.New("このメールアドレスは既に登録されています")
 	}
@@ -65,7 +98,7 @@ func (s *AuthService) Register(ctx context.Context, req dto.RegisterRequest) (*d
 	}
 
 	user := &model.User{
-		Email:        req.Email,
+		Email:        email,
 		PasswordHash: hash,
 		Name:         req.Name,
 		Role:         "user",
@@ -75,7 +108,7 @@ func (s *AuthService) Register(ctx context.Context, req dto.RegisterRequest) (*d
 		return nil, errors.New("ユーザーの作成に失敗しました")
 	}
 
-	token, err := pkg.GenerateToken(user.ID, user.Email, user.Role, s.jwtSecret)
+	token, err := pkg.GenerateToken(user.ID, user.Email, user.Role, user.TokenVersion, s.jwtSecret)
 	if err != nil {
 		return nil, errors.New("トークンの生成に失敗しました")
 	}
@@ -96,7 +129,7 @@ func (s *AuthService) Login(ctx context.Context, req dto.LoginRequest) (*dto.Aut
 		return nil, errors.New("メールとパスワードは必須です")
 	}
 
-	user, err := s.userRepo.FindByEmail(ctx, req.Email)
+	user, err := s.userRepo.FindByEmail(ctx, normalizeEmail(req.Email))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, errors.New("メールアドレスまたはパスワードが正しくありません")
@@ -108,7 +141,7 @@ func (s *AuthService) Login(ctx context.Context, req dto.LoginRequest) (*dto.Aut
 		return nil, errors.New("メールアドレスまたはパスワードが正しくありません")
 	}
 
-	token, err := pkg.GenerateToken(user.ID, user.Email, user.Role, s.jwtSecret)
+	token, err := pkg.GenerateToken(user.ID, user.Email, user.Role, user.TokenVersion, s.jwtSecret)
 	if err != nil {
 		return nil, errors.New("トークンの生成に失敗しました")
 	}
@@ -134,7 +167,7 @@ func (s *AuthService) EnsureAdminUser(ctx context.Context, email, password strin
 		return errors.New("ADMIN_PASSWORD は8文字以上にしてください")
 	}
 
-	email = strings.ToLower(strings.TrimSpace(email))
+	email = normalizeEmail(email)
 	existing, err := s.userRepo.FindByEmail(ctx, email)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
@@ -157,7 +190,7 @@ func (s *AuthService) EnsureAdminUser(ctx context.Context, email, password strin
 }
 
 func (s *AuthService) RequestPasswordReset(ctx context.Context, email string) error {
-	user, err := s.userRepo.FindByEmail(ctx, email)
+	user, err := s.userRepo.FindByEmail(ctx, normalizeEmail(email))
 	if err != nil || user == nil {
 		return nil
 	}
@@ -181,8 +214,8 @@ func (s *AuthService) RequestPasswordReset(ctx context.Context, email string) er
 }
 
 func (s *AuthService) ResetPasswordWithToken(ctx context.Context, token, newPassword string) error {
-	if len(newPassword) < 6 {
-		return errors.New("パスワードは6文字以上必要です")
+	if err := validatePassword(newPassword); err != nil {
+		return err
 	}
 
 	resetToken, err := s.resetRepo.FindValidToken(ctx, token)
@@ -209,7 +242,7 @@ func (s *AuthService) sendResetEmail(to, resetURL string) error {
 	}
 
 	body := map[string]any{
-		"from":    "rootage <onboarding@resend.dev>",
+		"from":    s.mailFrom,
 		"to":      []string{to},
 		"subject": "パスワードリセット - rootage",
 		"html": fmt.Sprintf(

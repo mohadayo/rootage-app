@@ -9,6 +9,14 @@ import (
 	"github.com/rootage-ses-quiz/backend/internal/model"
 )
 
+// DBTX は *sql.DB と *sql.Tx の両方が満たすクエリ実行インターフェース。
+// トランザクション有無を問わず同じリポジトリメソッドを使えるようにする。
+type DBTX interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
 type DocumentRepository struct {
 	db *sql.DB
 }
@@ -17,16 +25,51 @@ func NewDocumentRepository(db *sql.DB) *DocumentRepository {
 	return &DocumentRepository{db: db}
 }
 
-func (r *DocumentRepository) Create(ctx context.Context, doc *model.Document) error {
-	return r.db.QueryRowContext(ctx,
+// BeginTx はドキュメント関連の複数更新を1トランザクションにまとめるために使う。
+func (r *DocumentRepository) BeginTx(ctx context.Context) (*sql.Tx, error) {
+	return r.db.BeginTx(ctx, nil)
+}
+
+// CreateWith は指定した実行体（*sql.DB か *sql.Tx）で documents 行を作成する。
+func (r *DocumentRepository) CreateWith(ctx context.Context, q DBTX, doc *model.Document) error {
+	return q.QueryRowContext(ctx,
 		`INSERT INTO documents (title, filename, content) VALUES ($1, $2, $3) RETURNING id, uploaded_at`,
 		doc.Title, doc.Filename, doc.Content,
 	).Scan(&doc.ID, &doc.UploadedAt)
 }
 
+func (r *DocumentRepository) Create(ctx context.Context, doc *model.Document) error {
+	return r.CreateWith(ctx, r.db, doc)
+}
+
 func (r *DocumentRepository) List(ctx context.Context) ([]model.Document, error) {
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT id, title, filename, uploaded_at FROM documents ORDER BY uploaded_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var docs []model.Document
+	for rows.Next() {
+		var d model.Document
+		if err := rows.Scan(&d.ID, &d.Title, &d.Filename, &d.UploadedAt); err != nil {
+			return nil, err
+		}
+		docs = append(docs, d)
+	}
+	return docs, rows.Err()
+}
+
+// ListWithoutChunks はまだインデックス（チャンク）が作られていない文書だけを返す。
+// 起動時の一括インデックス処理で、未処理分だけを対象にするために使う。
+func (r *DocumentRepository) ListWithoutChunks(ctx context.Context) ([]model.Document, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT d.id, d.title, d.filename, d.uploaded_at
+		 FROM documents d
+		 LEFT JOIN document_chunks dc ON dc.document_id = d.id
+		 WHERE dc.id IS NULL
+		 ORDER BY d.uploaded_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -59,9 +102,12 @@ func (r *DocumentRepository) Delete(ctx context.Context, id string) error {
 	return err
 }
 
-func (r *DocumentRepository) CreateChunks(ctx context.Context, chunks []model.DocumentChunk) error {
+func (r *DocumentRepository) CreateChunks(ctx context.Context, q DBTX, chunks []model.DocumentChunk) error {
 	if len(chunks) == 0 {
 		return nil
+	}
+	if q == nil {
+		q = r.db
 	}
 
 	valueStrings := make([]string, 0, len(chunks))
@@ -79,12 +125,15 @@ func (r *DocumentRepository) CreateChunks(ctx context.Context, chunks []model.Do
 		strings.Join(valueStrings, ", "),
 	)
 
-	_, err := r.db.ExecContext(ctx, query, valueArgs...)
+	_, err := q.ExecContext(ctx, query, valueArgs...)
 	return err
 }
 
-func (r *DocumentRepository) DeleteChunksByDocument(ctx context.Context, docID string) error {
-	_, err := r.db.ExecContext(ctx, `DELETE FROM document_chunks WHERE document_id = $1`, docID)
+func (r *DocumentRepository) DeleteChunksByDocument(ctx context.Context, q DBTX, docID string) error {
+	if q == nil {
+		q = r.db
+	}
+	_, err := q.ExecContext(ctx, `DELETE FROM document_chunks WHERE document_id = $1`, docID)
 	return err
 }
 

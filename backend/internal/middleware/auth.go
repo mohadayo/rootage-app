@@ -16,7 +16,12 @@ const (
 	RoleKey   contextKey = "role"
 )
 
-func Auth(secret string, next http.HandlerFunc) http.HandlerFunc {
+// TokenVersionFunc はユーザーの現在のトークン世代を返す。
+// パスワード変更・ロール変更で古いトークンを失効させるために使う。
+// middleware をリポジトリ実装に結合させないよう関数として注入する。
+type TokenVersionFunc func(ctx context.Context, userID string) (int, error)
+
+func Auth(secret string, tokenVersion TokenVersionFunc, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		authHeader := r.Header.Get("Authorization")
 		if authHeader == "" {
@@ -34,6 +39,15 @@ func Auth(secret string, next http.HandlerFunc) http.HandlerFunc {
 		if err != nil {
 			pkg.WriteError(w, http.StatusUnauthorized, "無効なトークンです")
 			return
+		}
+
+		// トークン世代を DB の現在値と突合し、パスワード変更後の古いトークンを失効させる。
+		if tokenVersion != nil {
+			current, err := tokenVersion(r.Context(), claims.UserID)
+			if err != nil || current != claims.TokenVersion {
+				pkg.WriteError(w, http.StatusUnauthorized, "無効なトークンです")
+				return
+			}
 		}
 
 		ctx := context.WithValue(r.Context(), UserIDKey, claims.UserID)

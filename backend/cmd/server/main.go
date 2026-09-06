@@ -7,6 +7,9 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"sort"
+	"strings"
 	"syscall"
 	"time"
 
@@ -52,7 +55,7 @@ func main() {
 	resetRepo := repository.NewPasswordResetRepository(db)
 
 	// Services
-	authSvc := service.NewAuthService(userRepo, resetRepo, cfg.JWTSecret, cfg.AllowedEmailDomain, cfg.ResendAPIKey, cfg.BaseURL)
+	authSvc := service.NewAuthService(userRepo, resetRepo, cfg.JWTSecret, cfg.AllowedEmailDomain, cfg.ResendAPIKey, cfg.MailFrom, cfg.BaseURL)
 	quizSvc := service.NewQuizService(quizRepo, questionRepo, categoryRepo)
 	openaiClient := service.NewOpenAIClient(cfg.OpenAIAPIKey)
 	if cfg.OpenAIAPIKey == "" {
@@ -95,61 +98,61 @@ func main() {
 	mux.HandleFunc("POST /api/auth/reset-password", authHandler.ResetPassword)
 
 	// Category routes (authenticated)
-	mux.HandleFunc("GET /api/categories", middleware.Auth(cfg.JWTSecret, quizHandler.ListCategories))
+	mux.HandleFunc("GET /api/categories", middleware.Auth(cfg.JWTSecret, userRepo.GetTokenVersion, quizHandler.ListCategories))
 
 	// Quiz routes (authenticated)
-	mux.HandleFunc("POST /api/quiz/start", middleware.Auth(cfg.JWTSecret, quizHandler.Start))
-	mux.HandleFunc("POST /api/quiz/answer", middleware.Auth(cfg.JWTSecret, quizHandler.Answer))
-	mux.HandleFunc("POST /api/quiz/finish", middleware.Auth(cfg.JWTSecret, quizHandler.Finish))
-	mux.HandleFunc("GET /api/quiz/history", middleware.Auth(cfg.JWTSecret, quizHandler.History))
-	mux.HandleFunc("GET /api/quiz/review", middleware.Auth(cfg.JWTSecret, quizHandler.Review))
-	mux.HandleFunc("GET /api/quiz/stats", middleware.Auth(cfg.JWTSecret, quizHandler.Stats))
+	mux.HandleFunc("POST /api/quiz/start", middleware.Auth(cfg.JWTSecret, userRepo.GetTokenVersion, quizHandler.Start))
+	mux.HandleFunc("POST /api/quiz/answer", middleware.Auth(cfg.JWTSecret, userRepo.GetTokenVersion, quizHandler.Answer))
+	mux.HandleFunc("POST /api/quiz/finish", middleware.Auth(cfg.JWTSecret, userRepo.GetTokenVersion, quizHandler.Finish))
+	mux.HandleFunc("GET /api/quiz/history", middleware.Auth(cfg.JWTSecret, userRepo.GetTokenVersion, quizHandler.History))
+	mux.HandleFunc("GET /api/quiz/review", middleware.Auth(cfg.JWTSecret, userRepo.GetTokenVersion, quizHandler.Review))
+	mux.HandleFunc("GET /api/quiz/stats", middleware.Auth(cfg.JWTSecret, userRepo.GetTokenVersion, quizHandler.Stats))
 
 	// User dashboard (authenticated)
-	mux.HandleFunc("GET /api/users/me/stats", middleware.Auth(cfg.JWTSecret, quizHandler.Dashboard))
+	mux.HandleFunc("GET /api/users/me/stats", middleware.Auth(cfg.JWTSecret, userRepo.GetTokenVersion, quizHandler.Dashboard))
 
 	// RAG routes (authenticated)
-	mux.HandleFunc("POST /api/rag/ask", middleware.Auth(cfg.JWTSecret, ragHandler.Ask))
-	mux.HandleFunc("GET /api/rag/history", middleware.Auth(cfg.JWTSecret, ragHandler.History))
+	mux.HandleFunc("POST /api/rag/ask", middleware.Auth(cfg.JWTSecret, userRepo.GetTokenVersion, ragHandler.Ask))
+	mux.HandleFunc("GET /api/rag/history", middleware.Auth(cfg.JWTSecret, userRepo.GetTokenVersion, ragHandler.History))
 
 	// Admin routes (authenticated + admin)
-	mux.HandleFunc("GET /api/admin/questions", middleware.Auth(cfg.JWTSecret, middleware.Admin(adminHandler.ListQuestions)))
-	mux.HandleFunc("POST /api/admin/questions", middleware.Auth(cfg.JWTSecret, middleware.Admin(adminHandler.CreateQuestion)))
-	mux.HandleFunc("PUT /api/admin/questions/{id}", middleware.Auth(cfg.JWTSecret, middleware.Admin(adminHandler.UpdateQuestion)))
-	mux.HandleFunc("DELETE /api/admin/questions/{id}", middleware.Auth(cfg.JWTSecret, middleware.Admin(adminHandler.DeleteQuestion)))
-	mux.HandleFunc("POST /api/admin/questions/import", middleware.Auth(cfg.JWTSecret, middleware.Admin(adminHandler.ImportQuestions)))
+	mux.HandleFunc("GET /api/admin/questions", middleware.Auth(cfg.JWTSecret, userRepo.GetTokenVersion, middleware.Admin(adminHandler.ListQuestions)))
+	mux.HandleFunc("POST /api/admin/questions", middleware.Auth(cfg.JWTSecret, userRepo.GetTokenVersion, middleware.Admin(adminHandler.CreateQuestion)))
+	mux.HandleFunc("PUT /api/admin/questions/{id}", middleware.Auth(cfg.JWTSecret, userRepo.GetTokenVersion, middleware.Admin(adminHandler.UpdateQuestion)))
+	mux.HandleFunc("DELETE /api/admin/questions/{id}", middleware.Auth(cfg.JWTSecret, userRepo.GetTokenVersion, middleware.Admin(adminHandler.DeleteQuestion)))
+	mux.HandleFunc("POST /api/admin/questions/import", middleware.Auth(cfg.JWTSecret, userRepo.GetTokenVersion, middleware.Admin(adminHandler.ImportQuestions)))
 
-	mux.HandleFunc("GET /api/admin/categories", middleware.Auth(cfg.JWTSecret, middleware.Admin(adminHandler.ListCategories)))
-	mux.HandleFunc("POST /api/admin/categories", middleware.Auth(cfg.JWTSecret, middleware.Admin(adminHandler.CreateCategory)))
-	mux.HandleFunc("PUT /api/admin/categories/{id}", middleware.Auth(cfg.JWTSecret, middleware.Admin(adminHandler.UpdateCategory)))
-	mux.HandleFunc("DELETE /api/admin/categories/{id}", middleware.Auth(cfg.JWTSecret, middleware.Admin(adminHandler.DeleteCategory)))
+	mux.HandleFunc("GET /api/admin/categories", middleware.Auth(cfg.JWTSecret, userRepo.GetTokenVersion, middleware.Admin(adminHandler.ListCategories)))
+	mux.HandleFunc("POST /api/admin/categories", middleware.Auth(cfg.JWTSecret, userRepo.GetTokenVersion, middleware.Admin(adminHandler.CreateCategory)))
+	mux.HandleFunc("PUT /api/admin/categories/{id}", middleware.Auth(cfg.JWTSecret, userRepo.GetTokenVersion, middleware.Admin(adminHandler.UpdateCategory)))
+	mux.HandleFunc("DELETE /api/admin/categories/{id}", middleware.Auth(cfg.JWTSecret, userRepo.GetTokenVersion, middleware.Admin(adminHandler.DeleteCategory)))
 
-	mux.HandleFunc("GET /api/admin/documents", middleware.Auth(cfg.JWTSecret, middleware.Admin(adminHandler.ListDocuments)))
-	mux.HandleFunc("POST /api/admin/documents", middleware.Auth(cfg.JWTSecret, middleware.Admin(adminHandler.UploadDocument)))
-	mux.HandleFunc("POST /api/admin/documents/text", middleware.Auth(cfg.JWTSecret, middleware.Admin(adminHandler.CreateDocumentFromText)))
-	mux.HandleFunc("DELETE /api/admin/documents/{id}", middleware.Auth(cfg.JWTSecret, middleware.Admin(adminHandler.DeleteDocument)))
-	mux.HandleFunc("POST /api/admin/documents/{id}/reindex", middleware.Auth(cfg.JWTSecret, middleware.Admin(adminHandler.ReindexDocument)))
+	mux.HandleFunc("GET /api/admin/documents", middleware.Auth(cfg.JWTSecret, userRepo.GetTokenVersion, middleware.Admin(adminHandler.ListDocuments)))
+	mux.HandleFunc("POST /api/admin/documents", middleware.Auth(cfg.JWTSecret, userRepo.GetTokenVersion, middleware.Admin(adminHandler.UploadDocument)))
+	mux.HandleFunc("POST /api/admin/documents/text", middleware.Auth(cfg.JWTSecret, userRepo.GetTokenVersion, middleware.Admin(adminHandler.CreateDocumentFromText)))
+	mux.HandleFunc("DELETE /api/admin/documents/{id}", middleware.Auth(cfg.JWTSecret, userRepo.GetTokenVersion, middleware.Admin(adminHandler.DeleteDocument)))
+	mux.HandleFunc("POST /api/admin/documents/{id}/reindex", middleware.Auth(cfg.JWTSecret, userRepo.GetTokenVersion, middleware.Admin(adminHandler.ReindexDocument)))
 
 	// Admin summary
-	mux.HandleFunc("GET /api/admin/summary", middleware.Auth(cfg.JWTSecret, middleware.Admin(adminHandler.GetSummary)))
+	mux.HandleFunc("GET /api/admin/summary", middleware.Auth(cfg.JWTSecret, userRepo.GetTokenVersion, middleware.Admin(adminHandler.GetSummary)))
 
 	// User progress (admin)
-	mux.HandleFunc("GET /api/admin/user-progress", middleware.Auth(cfg.JWTSecret, middleware.Admin(adminHandler.GetUserProgress)))
-	mux.HandleFunc("POST /api/admin/users/{id}/reset-password", middleware.Auth(cfg.JWTSecret, middleware.Admin(adminHandler.ResetPassword)))
+	mux.HandleFunc("GET /api/admin/user-progress", middleware.Auth(cfg.JWTSecret, userRepo.GetTokenVersion, middleware.Admin(adminHandler.GetUserProgress)))
+	mux.HandleFunc("POST /api/admin/users/{id}/reset-password", middleware.Auth(cfg.JWTSecret, userRepo.GetTokenVersion, middleware.Admin(adminHandler.ResetPassword)))
 
 	// Guide routes (user)
-	mux.HandleFunc("GET /api/guides", middleware.Auth(cfg.JWTSecret, adminHandler.ListPublishedGuides))
-	mux.HandleFunc("GET /api/guides/{id}", middleware.Auth(cfg.JWTSecret, adminHandler.GetGuide))
+	mux.HandleFunc("GET /api/guides", middleware.Auth(cfg.JWTSecret, userRepo.GetTokenVersion, adminHandler.ListPublishedGuides))
+	mux.HandleFunc("GET /api/guides/{id}", middleware.Auth(cfg.JWTSecret, userRepo.GetTokenVersion, adminHandler.GetGuide))
 
 	// Guide admin routes
-	mux.HandleFunc("GET /api/admin/guide-categories", middleware.Auth(cfg.JWTSecret, middleware.Admin(adminHandler.ListGuideCategories)))
-	mux.HandleFunc("POST /api/admin/guide-categories", middleware.Auth(cfg.JWTSecret, middleware.Admin(adminHandler.CreateGuideCategory)))
-	mux.HandleFunc("PUT /api/admin/guide-categories/{id}", middleware.Auth(cfg.JWTSecret, middleware.Admin(adminHandler.UpdateGuideCategory)))
-	mux.HandleFunc("DELETE /api/admin/guide-categories/{id}", middleware.Auth(cfg.JWTSecret, middleware.Admin(adminHandler.DeleteGuideCategory)))
-	mux.HandleFunc("GET /api/admin/guides", middleware.Auth(cfg.JWTSecret, middleware.Admin(adminHandler.ListGuides)))
-	mux.HandleFunc("POST /api/admin/guides", middleware.Auth(cfg.JWTSecret, middleware.Admin(adminHandler.CreateGuide)))
-	mux.HandleFunc("PUT /api/admin/guides/{id}", middleware.Auth(cfg.JWTSecret, middleware.Admin(adminHandler.UpdateGuide)))
-	mux.HandleFunc("DELETE /api/admin/guides/{id}", middleware.Auth(cfg.JWTSecret, middleware.Admin(adminHandler.DeleteGuide)))
+	mux.HandleFunc("GET /api/admin/guide-categories", middleware.Auth(cfg.JWTSecret, userRepo.GetTokenVersion, middleware.Admin(adminHandler.ListGuideCategories)))
+	mux.HandleFunc("POST /api/admin/guide-categories", middleware.Auth(cfg.JWTSecret, userRepo.GetTokenVersion, middleware.Admin(adminHandler.CreateGuideCategory)))
+	mux.HandleFunc("PUT /api/admin/guide-categories/{id}", middleware.Auth(cfg.JWTSecret, userRepo.GetTokenVersion, middleware.Admin(adminHandler.UpdateGuideCategory)))
+	mux.HandleFunc("DELETE /api/admin/guide-categories/{id}", middleware.Auth(cfg.JWTSecret, userRepo.GetTokenVersion, middleware.Admin(adminHandler.DeleteGuideCategory)))
+	mux.HandleFunc("GET /api/admin/guides", middleware.Auth(cfg.JWTSecret, userRepo.GetTokenVersion, middleware.Admin(adminHandler.ListGuides)))
+	mux.HandleFunc("POST /api/admin/guides", middleware.Auth(cfg.JWTSecret, userRepo.GetTokenVersion, middleware.Admin(adminHandler.CreateGuide)))
+	mux.HandleFunc("PUT /api/admin/guides/{id}", middleware.Auth(cfg.JWTSecret, userRepo.GetTokenVersion, middleware.Admin(adminHandler.UpdateGuide)))
+	mux.HandleFunc("DELETE /api/admin/guides/{id}", middleware.Auth(cfg.JWTSecret, userRepo.GetTokenVersion, middleware.Admin(adminHandler.DeleteGuide)))
 
 	// フロントエンドの静的ファイル配信（本番用）
 	if _, err := os.Stat("public"); err == nil {
@@ -204,39 +207,89 @@ func main() {
 
 func runSeed(db *sql.DB) {
 	log.Println("Checking seed data...")
+
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS seed_applied (
+		name TEXT PRIMARY KEY,
+		applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+	)`); err != nil {
+		log.Fatalf("failed to create seed_applied table: %v", err)
+	}
+
+	applied := loadApplied(db, "SELECT name FROM seed_applied")
+
 	files := []struct {
 		path  string
-		check string // このクエリが0件ならシードを実行
+		check string // このクエリが0件ならシードを実行（0件でなければ投入済みとみなす）
 	}{
 		{"seed/seed.sql", "SELECT COUNT(*) FROM categories"},
 		{"seed/seed_content.sql", "SELECT COUNT(*) FROM questions WHERE difficulty = 'intermediate'"},
-		{"seed/seed_java.sql", "SELECT COUNT(*) FROM questions WHERE explanation LIKE '%Java%Silver%'"},
+		// text 完全一致で判定する。旧ガードの LIKE '%Java%Silver%' は該当行が無く
+		// 常に0件になり、起動のたびに seed_java.sql が重複挿入されていた。
+		{"seed/seed_java.sql", "SELECT COUNT(*) FROM questions WHERE text = 'Javaでクラスを継承するためのキーワードはどれですか？'"},
 		{"seed/seed_guides.sql", "SELECT COUNT(*) FROM guide_categories"},
 		{"seed/seed_documents.sql", "SELECT COUNT(*) FROM documents"},
 	}
 
 	for _, f := range files {
-		var count int
-		if err := db.QueryRow(f.check).Scan(&count); err == nil && count > 0 {
+		name := filepath.Base(f.path)
+		if applied[name] {
 			continue
 		}
+
+		// 既存 DB（seed_applied が空）向けのバックフィル:
+		// データが既に存在するならシードは実行済みとみなし、記録だけ付けて二重投入を防ぐ。
+		var count int
+		if err := db.QueryRow(f.check).Scan(&count); err == nil && count > 0 {
+			markSeedApplied(db, name)
+			continue
+		}
+
 		data, err := os.ReadFile(f.path)
 		if err != nil {
 			log.Printf("Seed file %s not found, skipping", f.path)
 			continue
 		}
 		if _, err := db.Exec(string(data)); err != nil {
-			log.Printf("Seed %s error: %v", f.path, err)
-		} else {
-			log.Printf("Seed applied: %s", f.path)
+			log.Fatalf("seed %s failed: %v", f.path, err)
 		}
+		markSeedApplied(db, name)
+		log.Printf("Seed applied: %s", f.path)
 	}
+}
+
+func markSeedApplied(db *sql.DB, name string) {
+	if _, err := db.Exec(`INSERT INTO seed_applied (name) VALUES ($1) ON CONFLICT (name) DO NOTHING`, name); err != nil {
+		log.Fatalf("failed to record seed %s: %v", name, err)
+	}
+}
+
+func loadApplied(db *sql.DB, query string) map[string]bool {
+	applied := map[string]bool{}
+	rows, err := db.Query(query)
+	if err != nil {
+		log.Fatalf("failed to load applied records: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			log.Fatalf("failed to scan applied record: %v", err)
+		}
+		applied[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		log.Fatalf("failed to iterate applied records: %v", err)
+	}
+	return applied
 }
 
 func indexUnprocessedDocuments(adminSvc *service.AdminService) {
 	ctx := context.Background()
-	docs, err := adminSvc.ListDocuments(ctx)
+	// チャンクを持たない文書だけを対象にする。全文書を無条件に再 embedding すると
+	// コールドスタートのたびに OpenAI 課金が発生するため。
+	docs, err := adminSvc.ListUnindexedDocuments(ctx)
 	if err != nil {
+		log.Printf("Failed to list unindexed documents: %v", err)
 		return
 	}
 	for _, doc := range docs {
@@ -249,25 +302,55 @@ func indexUnprocessedDocuments(adminSvc *service.AdminService) {
 }
 
 func runMigrations(db *sql.DB) {
-	files, err := os.ReadDir("migrations")
-	if err != nil {
-		log.Println("No migrations directory found, skipping")
-		return
+	// 適用済みバージョンを記録し、各マイグレーションを一度だけ実行する。
+	// 失敗したら握り潰さず起動を止める（壊れた状態のまま配信させない）。
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
+		version TEXT PRIMARY KEY,
+		applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+	)`); err != nil {
+		log.Fatalf("failed to create schema_migrations table: %v", err)
 	}
 
-	for _, f := range files {
-		if f.IsDir() {
+	applied := loadApplied(db, "SELECT version FROM schema_migrations")
+
+	entries, err := os.ReadDir("migrations")
+	if err != nil {
+		log.Fatalf("migrations directory not found: %v", err)
+	}
+
+	var names []string
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".sql") {
+			names = append(names, e.Name())
+		}
+	}
+	sort.Strings(names) // ファイル名順（001, 002, ...）に適用する
+
+	for _, name := range names {
+		if applied[name] {
 			continue
 		}
-		data, err := os.ReadFile("migrations/" + f.Name())
+		data, err := os.ReadFile("migrations/" + name)
 		if err != nil {
-			log.Printf("Failed to read migration %s: %v", f.Name(), err)
-			continue
+			log.Fatalf("failed to read migration %s: %v", name, err)
 		}
-		if _, err := db.Exec(string(data)); err != nil {
-			log.Printf("Migration %s: %v (may already be applied)", f.Name(), err)
-		} else {
-			log.Printf("Migration applied: %s", f.Name())
+
+		// 1ファイル分をトランザクションで適用し、適用記録も同一トランザクションに含める。
+		tx, err := db.Begin()
+		if err != nil {
+			log.Fatalf("failed to begin migration %s: %v", name, err)
 		}
+		if _, err := tx.Exec(string(data)); err != nil {
+			_ = tx.Rollback()
+			log.Fatalf("migration %s failed: %v", name, err)
+		}
+		if _, err := tx.Exec(`INSERT INTO schema_migrations (version) VALUES ($1)`, name); err != nil {
+			_ = tx.Rollback()
+			log.Fatalf("failed to record migration %s: %v", name, err)
+		}
+		if err := tx.Commit(); err != nil {
+			log.Fatalf("failed to commit migration %s: %v", name, err)
+		}
+		log.Printf("Migration applied: %s", name)
 	}
 }
