@@ -48,7 +48,7 @@ func setupTestEnv(t *testing.T) *testEnv {
 	quizRepo := repository.NewQuizRepository(db)
 
 	resetRepo := repository.NewPasswordResetRepository(db)
-	authSvc := service.NewAuthService(userRepo, resetRepo, testJWTSecret, "", "", "http://localhost:5173")
+	authSvc := service.NewAuthService(userRepo, resetRepo, testJWTSecret, "", "", "", "http://localhost:5173")
 	quizSvc := service.NewQuizService(quizRepo, questionRepo, categoryRepo)
 
 	authHandler := NewAuthHandler(authSvc)
@@ -57,13 +57,13 @@ func setupTestEnv(t *testing.T) *testEnv {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/auth/register", authHandler.Register)
 	mux.HandleFunc("POST /api/auth/login", authHandler.Login)
-	mux.HandleFunc("GET /api/categories", middleware.Auth(testJWTSecret, quizHandler.ListCategories))
-	mux.HandleFunc("POST /api/quiz/start", middleware.Auth(testJWTSecret, quizHandler.Start))
-	mux.HandleFunc("POST /api/quiz/answer", middleware.Auth(testJWTSecret, quizHandler.Answer))
-	mux.HandleFunc("POST /api/quiz/finish", middleware.Auth(testJWTSecret, quizHandler.Finish))
-	mux.HandleFunc("GET /api/quiz/stats", middleware.Auth(testJWTSecret, quizHandler.Stats))
-	mux.HandleFunc("GET /api/users/me/stats", middleware.Auth(testJWTSecret, quizHandler.Dashboard))
-	mux.HandleFunc("GET /api/quiz/review", middleware.Auth(testJWTSecret, quizHandler.Review))
+	mux.HandleFunc("GET /api/categories", middleware.Auth(testJWTSecret, userRepo.GetTokenVersion, quizHandler.ListCategories))
+	mux.HandleFunc("POST /api/quiz/start", middleware.Auth(testJWTSecret, userRepo.GetTokenVersion, quizHandler.Start))
+	mux.HandleFunc("POST /api/quiz/answer", middleware.Auth(testJWTSecret, userRepo.GetTokenVersion, quizHandler.Answer))
+	mux.HandleFunc("POST /api/quiz/finish", middleware.Auth(testJWTSecret, userRepo.GetTokenVersion, quizHandler.Finish))
+	mux.HandleFunc("GET /api/quiz/stats", middleware.Auth(testJWTSecret, userRepo.GetTokenVersion, quizHandler.Stats))
+	mux.HandleFunc("GET /api/users/me/stats", middleware.Auth(testJWTSecret, userRepo.GetTokenVersion, quizHandler.Dashboard))
+	mux.HandleFunc("GET /api/quiz/review", middleware.Auth(testJWTSecret, userRepo.GetTokenVersion, quizHandler.Review))
 
 	return &testEnv{
 		db:          db,
@@ -78,7 +78,8 @@ func (e *testEnv) cleanup(t *testing.T, email string) {
 	t.Helper()
 	// テストユーザーと関連データを削除
 	var userID string
-	err := e.db.QueryRow("SELECT id FROM users WHERE email = $1", email).Scan(&userID)
+	// 登録時にメールは小文字化されるため、大小を無視して照合する。
+	err := e.db.QueryRow("SELECT id FROM users WHERE lower(email) = lower($1)", email).Scan(&userID)
 	if err != nil {
 		return
 	}

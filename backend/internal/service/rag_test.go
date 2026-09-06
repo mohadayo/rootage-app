@@ -60,11 +60,31 @@ func TestChunkText_SingleParagraph(t *testing.T) {
 }
 
 func TestChunkText_LargeParagraph(t *testing.T) {
-	// maxCharsを超える単一段落はそのまま1チャンクになる
+	// maxCharsを超える単一段落は rune 単位でハードスプリットされる。
+	// （分割しないと embedding API の入力上限を超えてインデックス不能になるため）
 	text := strings.Repeat("a", 2000)
 	chunks := ChunkText(text, 1000)
-	if len(chunks) != 1 {
-		t.Errorf("expected 1 chunk for unsplittable text, got %d", len(chunks))
+	if len(chunks) != 2 {
+		t.Fatalf("expected 2 chunks for oversized paragraph, got %d", len(chunks))
+	}
+	for i, c := range chunks {
+		if len([]rune(c)) > 1000 {
+			t.Errorf("chunk %d exceeds maxChars: %d runes", i, len([]rune(c)))
+		}
+	}
+}
+
+func TestChunkText_CRLFParagraphs(t *testing.T) {
+	// CRLF 区切りのテキストも段落分割され、巨大な1チャンクにならない。
+	text := strings.Repeat("これは行テキストです。\r\n\r\n", 300)
+	chunks := ChunkText(text, 1000)
+	if len(chunks) < 2 {
+		t.Fatalf("expected CRLF text to be split into multiple chunks, got %d", len(chunks))
+	}
+	for i, c := range chunks {
+		if len([]rune(c)) > 1000 {
+			t.Errorf("chunk %d exceeds maxChars: %d runes", i, len([]rune(c)))
+		}
 	}
 }
 

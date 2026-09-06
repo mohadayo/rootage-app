@@ -70,6 +70,38 @@ func TestRegister_ShortPassword(t *testing.T) {
 	}
 }
 
+func TestRegister_WeakPassword(t *testing.T) {
+	env := setupTestEnv(t)
+	email := uniqueEmail("reg-weak")
+	defer env.cleanup(t, email)
+
+	// 長さは足りるが、よくある弱いパスワードは拒否する
+	w := env.request("POST", "/api/auth/register", map[string]string{
+		"name": "User", "email": email, "password": "password",
+	}, "")
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
+func TestLogin_CaseInsensitiveEmail(t *testing.T) {
+	env := setupTestEnv(t)
+	base := uniqueEmail("case")
+	mixed := "Mixed-" + base // 大文字を含むアドレスで登録
+	defer env.cleanup(t, mixed)
+
+	env.registerUser(t, "Case", mixed, "password123")
+
+	// 小文字で入力してもログインできる（正規化されているため）
+	w := env.request("POST", "/api/auth/login", map[string]string{
+		"email": "mixed-" + base, "password": "password123",
+	}, "")
+	if w.Code != http.StatusOK {
+		t.Errorf("case-insensitive login status = %d, want %d (body=%s)", w.Code, http.StatusOK, w.Body.String())
+	}
+}
+
 func TestRegister_MissingFields(t *testing.T) {
 	env := setupTestEnv(t)
 

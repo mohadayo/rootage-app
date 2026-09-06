@@ -10,7 +10,7 @@ import (
 const testSecret = "test-secret-key"
 
 func TestGenerateAndValidateToken(t *testing.T) {
-	token, err := GenerateToken("user-123", "test@example.com", "user", testSecret)
+	token, err := GenerateToken("user-123", "test@example.com", "user", 0, testSecret)
 	if err != nil {
 		t.Fatalf("GenerateToken failed: %v", err)
 	}
@@ -34,7 +34,7 @@ func TestGenerateAndValidateToken(t *testing.T) {
 }
 
 func TestValidateToken_WrongSecret(t *testing.T) {
-	token, _ := GenerateToken("user-123", "test@example.com", "user", testSecret)
+	token, _ := GenerateToken("user-123", "test@example.com", "user", 0, testSecret)
 
 	_, err := ValidateToken(token, "wrong-secret")
 	if err == nil {
@@ -76,7 +76,7 @@ func TestValidateToken_ExpiredToken(t *testing.T) {
 }
 
 func TestGenerateToken_AdminRole(t *testing.T) {
-	token, _ := GenerateToken("admin-1", "admin@example.com", "admin", testSecret)
+	token, _ := GenerateToken("admin-1", "admin@example.com", "admin", 0, testSecret)
 	claims, err := ValidateToken(token, testSecret)
 	if err != nil {
 		t.Fatalf("ValidateToken failed: %v", err)
