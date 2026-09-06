@@ -131,17 +131,21 @@ npm run dev
 
 | 変数 | 説明 | デフォルト |
 |---|---|---|
+| `APP_ENV` | 実行環境。`production` では `JWT_SECRET` 未設定だと起動を停止する | production |
 | `DB_URL` | PostgreSQL接続文字列 | localhost:5432 |
-| `JWT_SECRET` | JWTトークン署名キー | dev-secret-key |
+| `JWT_SECRET` | JWTトークン署名キー。**本番では必須**（未設定だと `production` では起動しない。`development` のみ開発用の既定値でフォールバック） | -（開発時のみ dev-secret-key） |
 | `OPENAI_API_KEY` | OpenAI APIキー | - |
 | `RESEND_API_KEY` | Resend APIキー（パスワードリセット用） | - |
+| `MAIL_FROM` | リセットメールの送信元。`onboarding@resend.dev` は Resend のサンドボックス用で本人以外に配送されないため、本番は検証済みドメインのアドレスを設定する | rootage \<onboarding@resend.dev\> |
 | `BASE_URL` | アプリのベースURL | CORS_ORIGINの値 |
 | `CORS_ORIGIN` | CORS許可オリジン | http://localhost:5173 |
-| `ALLOWED_EMAIL_DOMAIN` | 登録許可メールドメイン | - |
+| `ALLOWED_EMAIL_DOMAIN` | 登録許可メールドメイン（空なら制限なし） | - |
 | `ADMIN_EMAIL` | 初回起動時に作成する管理者のメール（未設定なら作成しない） | - |
 | `ADMIN_PASSWORD` | 同パスワード（8文字以上） | - |
 | `SERVER_PORT` | サーバーポート | 8080 |
 | `VITE_ENABLE_RAG` | 社内検索AI機能の有効化（フロント） | false |
+
+> マイグレーションとシードは `schema_migrations` / `seed_applied` テーブルで適用状況を管理し、各ファイルを一度だけ実行します。マイグレーションが失敗した場合は握り潰さずに起動を停止します（壊れた状態のまま配信しないため）。マイグレーション `001` は pgvector 拡張に依存するため、DB に pgvector が入っている必要があります（`docker compose` の `pgvector/pgvector` イメージには同梱）。
 
 ## 管理者アカウント
 
@@ -163,7 +167,7 @@ cd backend
 go test ./... -v
 ```
 
-64テスト（ユニットテスト + 統合テスト）が実行されます。`internal/handler` のテストは DB に接続するため、`docker compose up -d` で PostgreSQL を起動しておく必要があります。別の接続先を使う場合は `TEST_DB_URL` で指定できます。
+ユニットテストと統合テストが実行されます。`internal/handler` のテストは DB に接続するため、`docker compose up -d` で PostgreSQL を起動しておく必要があります。別の接続先を使う場合は `TEST_DB_URL` で指定できます。
 
 ```bash
 TEST_DB_URL="postgres://user:pass@localhost:5432/ses_quiz?sslmode=disable" go test ./...

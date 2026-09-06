@@ -17,6 +17,8 @@ services:
         fromDatabase:
           name: rootage-db
           property: connectionString
+      - key: APP_ENV
+        value: production
       - key: JWT_SECRET
         generateValue: true
       - key: OPENAI_API_KEY
@@ -25,9 +27,14 @@ services:
         value: "8080"
       - key: CORS_ORIGIN
         value: ""
+      # 実際の社員のドメインをダッシュボードで設定する（プレースホルダを焼き込まない）
       - key: ALLOWED_EMAIL_DOMAIN
-        value: example.com
+        sync: false
       - key: RESEND_API_KEY
+        sync: false
+      # パスワードリセットの送信元。Resend で検証済みドメインのアドレスを設定する
+      # （onboarding@resend.dev のままだと本人以外に配送されない）
+      - key: MAIL_FROM
         sync: false
       - key: BASE_URL
         value: https://rootage.onrender.com
