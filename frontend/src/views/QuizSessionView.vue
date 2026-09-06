@@ -27,16 +27,30 @@ function choiceClass(index: number) {
   return 'border-rootage-rule opacity-50'
 }
 
+const submitError = ref<string | null>(null)
+
 async function submit() {
   if (selectedIndex.value === null || submitting.value) return
   submitting.value = true
+  submitError.value = null
   try {
     const result = await quizStore.submitAnswer(selectedIndex.value)
     lastAnswer.value = result
     answered.value = true
+  } catch (e: unknown) {
+    // 回答の保存に失敗したときにエラーを握り潰さず画面に出す。
+    // （例: 出題中に管理者がその問題を削除した場合など）
+    const msg = (e as { response?: { data?: { error?: string } } })?.response?.data?.error
+    submitError.value = msg || '回答の送信に失敗しました。この問題をスキップして次に進んでください。'
   } finally {
     submitting.value = false
   }
+}
+
+// 回答不能な問題から抜けられるよう、次の問題（または結果）へスキップする。
+async function skip() {
+  submitError.value = null
+  await next()
 }
 
 async function next() {
@@ -108,8 +122,20 @@ if (!quizStore.sessionId) {
       <p class="text-gray-700 text-sm">{{ lastAnswer.explanation }}</p>
     </div>
 
+    <!-- Submit error -->
+    <div v-if="submitError" class="bg-red-50 border border-red-300 rounded-lg p-4 mb-4">
+      <p class="text-red-700 text-sm">{{ submitError }}</p>
+    </div>
+
     <!-- Action buttons -->
     <div class="flex justify-end gap-3">
+      <button
+        v-if="submitError && !answered"
+        @click="skip"
+        class="px-6 py-2 border border-rootage-rule text-rootage-text rounded-md hover:bg-gray-50"
+      >
+        {{ isLast ? '結果を見る' : 'この問題をスキップ' }}
+      </button>
       <button
         v-if="!answered"
         @click="submit"

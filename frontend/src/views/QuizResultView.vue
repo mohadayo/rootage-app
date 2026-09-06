@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { useQuizStore } from '@/stores/quiz'
 import { useRouter } from 'vue-router'
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 
 const router = useRouter()
 const quizStore = useQuizStore()
@@ -34,15 +34,27 @@ const nextDifficulty = computed(() => {
   return null
 })
 
+const startError = ref<string | null>(null)
+
+async function startAt(difficulty: string) {
+  startError.value = null
+  try {
+    await quizStore.startQuiz(quizStore.categoryId, difficulty)
+    router.replace(`/quiz/${quizStore.sessionId}`)
+  } catch (e: unknown) {
+    // 例外を握り潰さずに理由を表示する（例: その難易度に問題が0件）。
+    const msg = (e as { response?: { data?: { error?: string } } })?.response?.data?.error
+    startError.value = msg || 'クイズを開始できませんでした。この難易度には問題がない可能性があります。'
+  }
+}
+
 function retry() {
-  quizStore.startQuiz(quizStore.categoryId, quizStore.difficulty)
-    .then(() => router.replace(`/quiz/${quizStore.sessionId}`))
+  startAt(quizStore.difficulty)
 }
 
 function tryNextDifficulty() {
   if (!nextDifficulty.value) return
-  quizStore.startQuiz(quizStore.categoryId, nextDifficulty.value)
-    .then(() => router.replace(`/quiz/${quizStore.sessionId}`))
+  startAt(nextDifficulty.value)
 }
 
 function goHome() {
@@ -78,6 +90,11 @@ if (!quizStore.sessionId) {
           </span>
           <span class="text-gray-600">問{{ i + 1 }}</span>
         </div>
+      </div>
+
+      <!-- 開始エラー -->
+      <div v-if="startError" class="mb-3 rounded-md border border-red-300 bg-red-50 p-3">
+        <p class="text-sm text-red-700">{{ startError }}</p>
       </div>
 
       <!-- 次のアクション -->
