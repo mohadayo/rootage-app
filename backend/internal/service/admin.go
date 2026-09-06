@@ -53,8 +53,11 @@ func (s *AdminService) UpdateCategory(ctx context.Context, id string, req dto.Up
 	return s.categoryRepo.Update(ctx, cat)
 }
 
+// DeleteCategory は論理削除（is_active=false）にする。
+// 物理削除すると quiz_sessions / quiz_answers が CASCADE で巻き込まれ、
+// 全ユーザーの学習履歴が消えるため。
 func (s *AdminService) DeleteCategory(ctx context.Context, id string) error {
-	return s.categoryRepo.Delete(ctx, id)
+	return s.categoryRepo.Deactivate(ctx, id)
 }
 
 // Question CRUD
@@ -90,8 +93,10 @@ func (s *AdminService) UpdateQuestion(ctx context.Context, id string, req dto.Up
 	return s.questionRepo.Update(ctx, q)
 }
 
+// DeleteQuestion は論理削除（is_active=false）にする。
+// 物理削除すると quiz_answers が CASCADE で消え、回答履歴と正答率が壊れるため。
 func (s *AdminService) DeleteQuestion(ctx context.Context, id string) error {
-	return s.questionRepo.Delete(ctx, id)
+	return s.questionRepo.Deactivate(ctx, id)
 }
 
 func (s *AdminService) ImportQuestions(ctx context.Context, file io.Reader) (*dto.ImportQuestionsResponse, error) {
@@ -149,6 +154,11 @@ func (s *AdminService) ImportQuestions(ctx context.Context, file io.Reader) (*dt
 			continue
 		}
 
+		if !isValidDifficulty(difficulty) {
+			importErrors = append(importErrors, dto.ImportError{Row: rowNum, Message: fmt.Sprintf("難易度「%s」が不正です（beginner / intermediate / advanced のいずれか）", difficulty)})
+			continue
+		}
+
 		if text == "" {
 			importErrors = append(importErrors, dto.ImportError{Row: rowNum, Message: "問題文が空です"})
 			continue
@@ -187,10 +197,24 @@ func (s *AdminService) ImportQuestions(ctx context.Context, file io.Reader) (*dt
 	}, nil
 }
 
+func isValidDifficulty(d string) bool {
+	switch d {
+	case "beginner", "intermediate", "advanced":
+		return true
+	default:
+		return false
+	}
+}
+
 // Document management
 
 func (s *AdminService) ListDocuments(ctx context.Context) ([]model.Document, error) {
 	return s.documentRepo.List(ctx)
+}
+
+// ListUnindexedDocuments はチャンク未作成の文書だけを返す（起動時の一括処理用）。
+func (s *AdminService) ListUnindexedDocuments(ctx context.Context) ([]model.Document, error) {
+	return s.documentRepo.ListWithoutChunks(ctx)
 }
 
 func (s *AdminService) UploadDocument(ctx context.Context, title, filename string, file io.Reader) (*model.Document, error) {
@@ -198,44 +222,44 @@ func (s *AdminService) UploadDocument(ctx context.Context, title, filename strin
 	if err != nil {
 		return nil, fmt.Errorf("ファイルの読み込みに失敗しました: %w", err)
 	}
-
-	doc := &model.Document{
-		Title:    title,
-		Filename: filename,
-		Content:  string(content),
-	}
-
-	if err := s.documentRepo.Create(ctx, doc); err != nil {
-		return nil, fmt.Errorf("文書の保存に失敗しました: %w", err)
-	}
-
-	// Index the document
-	if err := s.indexDocument(ctx, doc); err != nil {
-		return nil, fmt.Errorf("インデックスの作成に失敗しました: %w", err)
-	}
-
-	return doc, nil
+	return s.createDocumentWithIndex(ctx, title, filename, string(content))
 }
 
 func (s *AdminService) CreateDocumentFromText(ctx context.Context, title, content string) (*model.Document, error) {
 	if title == "" || content == "" {
 		return nil, fmt.Errorf("タイトルと内容は必須です")
 	}
+	return s.createDocumentWithIndex(ctx, title, "text-input", content)
+}
 
-	doc := &model.Document{
-		Title:    title,
-		Filename: "text-input",
-		Content:  content,
-	}
-
-	if err := s.documentRepo.Create(ctx, doc); err != nil {
-		return nil, fmt.Errorf("文書の保存に失敗しました: %w", err)
-	}
-
-	if err := s.indexDocument(ctx, doc); err != nil {
+// createDocumentWithIndex は文書とそのチャンクを1トランザクションで作成する。
+// 埋め込み生成を先に済ませ、全て成功したときだけ documents 行を確定するため、
+// ベクトル化失敗で「本文だけ残ってチャンク0件」の孤児文書が生じない。
+func (s *AdminService) createDocumentWithIndex(ctx context.Context, title, filename, content string) (*model.Document, error) {
+	chunks, err := s.buildChunks(ctx, "", content)
+	if err != nil {
 		return nil, fmt.Errorf("インデックスの作成に失敗しました: %w", err)
 	}
 
+	tx, err := s.documentRepo.BeginTx(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("トランザクションの開始に失敗しました: %w", err)
+	}
+	defer tx.Rollback()
+
+	doc := &model.Document{Title: title, Filename: filename, Content: content}
+	if err := s.documentRepo.CreateWith(ctx, tx, doc); err != nil {
+		return nil, fmt.Errorf("文書の保存に失敗しました: %w", err)
+	}
+	for i := range chunks {
+		chunks[i].DocumentID = doc.ID
+	}
+	if err := s.documentRepo.CreateChunks(ctx, tx, chunks); err != nil {
+		return nil, fmt.Errorf("インデックスの作成に失敗しました: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("文書の保存に失敗しました: %w", err)
+	}
 	return doc, nil
 }
 
@@ -243,43 +267,56 @@ func (s *AdminService) DeleteDocument(ctx context.Context, id string) error {
 	return s.documentRepo.Delete(ctx, id)
 }
 
+// ReindexDocument は既存チャンクを新しいチャンクで置き換える。
+// 先に全チャンクの埋め込みを生成し（DB未変更）、成功後にトランザクションで
+// 削除と挿入をまとめて行う。OpenAI が途中でエラーを返しても既存チャンクは無傷。
 func (s *AdminService) ReindexDocument(ctx context.Context, id string) error {
 	doc, err := s.documentRepo.GetByID(ctx, id)
 	if err != nil {
 		return fmt.Errorf("文書が見つかりません: %w", err)
 	}
 
-	// Delete existing chunks
-	if err := s.documentRepo.DeleteChunksByDocument(ctx, id); err != nil {
-		return fmt.Errorf("既存チャンクの削除に失敗しました: %w", err)
+	chunks, err := s.buildChunks(ctx, doc.ID, doc.Content)
+	if err != nil {
+		return err
 	}
 
-	return s.indexDocument(ctx, doc)
+	tx, err := s.documentRepo.BeginTx(ctx)
+	if err != nil {
+		return fmt.Errorf("トランザクションの開始に失敗しました: %w", err)
+	}
+	defer tx.Rollback()
+
+	if err := s.documentRepo.DeleteChunksByDocument(ctx, tx, id); err != nil {
+		return fmt.Errorf("既存チャンクの削除に失敗しました: %w", err)
+	}
+	if err := s.documentRepo.CreateChunks(ctx, tx, chunks); err != nil {
+		return fmt.Errorf("チャンクの保存に失敗しました: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("チャンクの保存に失敗しました: %w", err)
+	}
+	return nil
 }
 
-func (s *AdminService) indexDocument(ctx context.Context, doc *model.Document) error {
-	textChunks := ChunkText(doc.Content, 1000)
-
-	var chunks []model.DocumentChunk
+// buildChunks は本文をチャンクに分割し、各チャンクの埋め込みを生成する。
+// DB には一切触れないため、途中で失敗しても既存データに影響しない。
+func (s *AdminService) buildChunks(ctx context.Context, docID, content string) ([]model.DocumentChunk, error) {
+	textChunks := ChunkText(content, 1000)
+	chunks := make([]model.DocumentChunk, 0, len(textChunks))
 	for i, text := range textChunks {
 		embedding, err := s.openaiClient.GenerateEmbedding(ctx, text)
 		if err != nil {
-			return fmt.Errorf("チャンク%dのベクトル化に失敗しました: %w", i+1, err)
+			return nil, fmt.Errorf("チャンク%dのベクトル化に失敗しました: %w", i+1, err)
 		}
-
 		chunks = append(chunks, model.DocumentChunk{
-			DocumentID: doc.ID,
+			DocumentID: docID,
 			ChunkIndex: i,
 			Content:    text,
 			Embedding:  embedding,
 		})
 	}
-
-	if err := s.documentRepo.CreateChunks(ctx, chunks); err != nil {
-		return fmt.Errorf("チャンクの保存に失敗しました: %w", err)
-	}
-
-	return nil
+	return chunks, nil
 }
 
 // Guide Category management
@@ -350,8 +387,8 @@ func (s *AdminService) DeleteGuide(ctx context.Context, id string) error {
 }
 
 func (s *AdminService) ResetPassword(ctx context.Context, userID, newPassword string) error {
-	if len(newPassword) < 6 {
-		return fmt.Errorf("パスワードは6文字以上必要です")
+	if err := validatePassword(newPassword); err != nil {
+		return err
 	}
 	hash, err := pkg.HashPassword(newPassword)
 	if err != nil {

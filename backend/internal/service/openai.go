@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 )
 
 type OpenAIClient struct {
@@ -15,8 +16,10 @@ type OpenAIClient struct {
 
 func NewOpenAIClient(apiKey string) *OpenAIClient {
 	return &OpenAIClient{
-		apiKey:     apiKey,
-		httpClient: &http.Client{},
+		apiKey: apiKey,
+		// タイムアウトを設定し、OpenAI が応答しないときにゴルーチンと接続が
+		// 無限に滞留するのを防ぐ。
+		httpClient: &http.Client{Timeout: 30 * time.Second},
 	}
 }
 

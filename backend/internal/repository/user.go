@@ -44,10 +44,12 @@ func (r *UserRepository) Create(ctx context.Context, user *model.User) error {
 
 func (r *UserRepository) FindByEmail(ctx context.Context, email string) (*model.User, error) {
 	var u model.User
+	// メールアドレスは大文字小文字を区別せずに照合する。
 	err := r.db.QueryRowContext(ctx,
-		`SELECT id, email, password_hash, name, role, created_at, updated_at FROM users WHERE email = $1`,
+		`SELECT id, email, password_hash, name, role, token_version, created_at, updated_at
+		 FROM users WHERE lower(email) = lower($1)`,
 		email,
-	).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.Name, &u.Role, &u.CreatedAt, &u.UpdatedAt)
+	).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.Name, &u.Role, &u.TokenVersion, &u.CreatedAt, &u.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -57,18 +59,30 @@ func (r *UserRepository) FindByEmail(ctx context.Context, email string) (*model.
 func (r *UserRepository) FindByID(ctx context.Context, id string) (*model.User, error) {
 	var u model.User
 	err := r.db.QueryRowContext(ctx,
-		`SELECT id, email, password_hash, name, role, created_at, updated_at FROM users WHERE id = $1`,
+		`SELECT id, email, password_hash, name, role, token_version, created_at, updated_at
+		 FROM users WHERE id = $1`,
 		id,
-	).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.Name, &u.Role, &u.CreatedAt, &u.UpdatedAt)
+	).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.Name, &u.Role, &u.TokenVersion, &u.CreatedAt, &u.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
 	return &u, nil
 }
 
+// GetTokenVersion はトークン検証時に DB の現在のトークン世代を引くために使う。
+func (r *UserRepository) GetTokenVersion(ctx context.Context, id string) (int, error) {
+	var v int
+	err := r.db.QueryRowContext(ctx,
+		`SELECT token_version FROM users WHERE id = $1`, id,
+	).Scan(&v)
+	return v, err
+}
+
+// UpdatePassword はパスワードを更新し、同時にトークン世代を進めて
+// 既存の JWT を失効させる（乗っ取り・退職時の封じ込め）。
 func (r *UserRepository) UpdatePassword(ctx context.Context, id, passwordHash string) error {
 	_, err := r.db.ExecContext(ctx,
-		`UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2`,
+		`UPDATE users SET password_hash = $1, token_version = token_version + 1, updated_at = NOW() WHERE id = $2`,
 		passwordHash, id,
 	)
 	return err
